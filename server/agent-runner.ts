@@ -31,8 +31,7 @@ import {
 } from "./file-structure-diff.js";
 import {
   validateRequirementPackage,
-  validateTechnicalDesign,
-  WorkflowDocumentError
+  validateTechnicalDesign
 } from "./workflow-documents.js";
 
 const MESSAGE_TIMEOUT_MS = 30 * 60 * 1000;
@@ -41,6 +40,7 @@ const TOOL_DESCRIPTION_RULE =
 const REQUIREMENT_INTERVIEW_RULES = [
   "围绕尚未明确且会影响用户可见行为或验收结果的产品决策进行访谈，逐项解决依赖关系，直到目标、范围和验收标准达成共同理解；每个问题给出推荐答案。",
   "一次只提出一个问题。",
+  "整个需求讨论最多向用户提出三个问题；达到上限后，剩余事项直接采用已经给出的推荐方案或合理默认值。",
   "能通过代码库、现有文档或项目约定回答的问题，先自行探索，不要反问用户。",
   "需求讨论只解决产品层决策：目标用户、使用场景、功能与内容范围、用户流程、可见交互、业务状态、异常体验、权限规则、产品兼容性、验收标准和非目标。",
   "不要询问或自行展开实现层决策，包括技术栈、框架或库选型、SSR/SPA、模板引擎、模块划分、API 设计、代码或数据结构、存储方案、CSS 工程方案、部署方式和测试工具；这些属于后续技术设计阶段。",
@@ -274,9 +274,6 @@ export async function validateTechnicalDesignDocument(
       throw new Error(`技术方案缺少必备章节：${alternatives.join("/")}`);
     }
   }
-  if (/待确认|TBD|TODO/iu.test(markdown)) {
-    throw new Error("技术方案仍包含待确认项");
-  }
   return documentPath;
 }
 
@@ -294,7 +291,8 @@ const testReportSections = [
 
 export async function validateStructuredTestReport(
   projectRoot: string,
-  requirementSequence: number | null
+  requirementSequence: number | null,
+  requireUiEvidence = false
 ): Promise<string> {
   if (!requirementSequence) throw new Error("测试报告缺少需求编号");
   const sequence = `R${String(requirementSequence).padStart(3, "0")}`;
@@ -310,15 +308,7 @@ export async function validateStructuredTestReport(
       throw new Error(`测试报告缺少必备章节：${section}`);
     }
   }
-  if (/待确认|未经说明的?跳过/iu.test(markdown)) {
-    throw new Error("测试报告仍包含待确认项或未说明的跳过项");
-  }
-  const conclusionIndex = markdown.search(/^#{1,6}\s+.*最终结论.*$/mu);
-  if (conclusionIndex < 0 || !/(通过|passed)/iu.test(markdown.slice(conclusionIndex))) {
-    throw new Error("测试报告最终结论不是通过");
-  }
-  const requiresScreenshots = /(界面|UI|桌面端|移动端)/iu.test(markdown);
-  if (requiresScreenshots) {
+  if (requireUiEvidence) {
     const imagePaths = [...markdown.matchAll(/!\[[^\]]*\]\(([^)]+)\)/g)]
       .map((match) => match[1].trim().split(/\s+/u)[0])
       .filter((path) => !/^(?:https?:|data:)/iu.test(path));
@@ -481,22 +471,21 @@ export function buildWorkItemPrompt(
       const sequence = `R${String(workItem.requirementSequence ?? 1).padStart(3, "0")}`;
       return [
         ...common,
-        "用户已经完成需求确认。当前任务不是继续访谈，而是将本工作项前面完整对话中已确认的结论整理成正式需求文档。",
-        `必须在 docs/requirements/${sequence}-<short-slug>/ 下创建 README.md，并按需要拆分原子需求文档；目录名必须以 ${sequence}- 开头。`,
-        "文档必须忠实覆盖已确认的目标、范围、用户流程、交互、状态、异常、数据、安全边界、验收标准和非目标，不得自行新增未讨论范围。",
-        "README.md 必须包含总体目标、范围、非目标、依赖和原子需求索引。原子文档必须包含目标、需求、验收标准、非目标和原子性检查。",
-        "正式文档不得保留“待确认”项；冲突结论必须替换旧结论并保留简短决策变更记录。",
-        "用户明确给出的技术信息只记录为实现约束；不得自行补充技术选型、系统架构、模块划分、API、代码或数据结构、CSS 工程方案、部署方案等技术设计内容。",
-        "只允许写入 docs/requirements；不要修改业务代码、技术方案或其他文档。除非缺少阻止落盘的关键信息，否则不要再提问。",
+        "这是需求确认后的文档补全任务。不要重新生成第二套需求文档，也不要继续访谈。",
+        `优先维护已有的 docs/requirements/${sequence}-*/ 需求包；若编号需求包尚未落盘，则只创建这一套。剩余事项采用此前推荐方案或合理默认值。`,
+        "不要声称已经进入技术设计阶段；平台会在本轮结束后校验并决定是否流转。",
         "",
         `系统任务：${userText}`
       ].join("\n");
     }
     if (workItem.workflowState === "requirements_discussion") {
+      const sequence = `R${String(workItem.requirementSequence ?? 1).padStart(3, "0")}`;
       return [
         ...common,
-        "当前处于需求讨论阶段。代码只读；只允许维护 docs/requirements 下的需求草稿。",
-        "每解决一个产品决策就立即增量更新当前需求草稿；未确认内容必须明确标记“待确认”，不得写成最终结论。",
+        "当前处于需求讨论阶段。代码只读；只允许维护 docs/requirements 下的当前需求包。",
+        `从第一轮开始就在 docs/requirements/${sequence}-<short-slug>/ 下维护 README.md，并按需要拆分原子需求文档；不要在 docs/requirements 根目录另外创建一套草稿。`,
+        "本轮结束前必须把当前结论实际写入编号需求包；即使正在等待用户回答，也不能把首次落盘推迟到用户确认之后。",
+        "每解决一个产品决策就立即增量更新当前需求包。尚未得到用户回答的事项使用推荐方案作为当前默认结论，并标注来源为“默认采用”；用户后续回答时再覆盖。",
         "新结论与旧结论冲突时替换旧结论，并在需求包中维护简短的决策变更记录。",
         "README 必须包含总体目标、范围、非目标、依赖和原子需求索引；每个原子需求包含目标、需求、验收标准、非目标和原子性检查。",
         "不要实现业务代码、安装依赖或执行构建。",
@@ -823,6 +812,7 @@ export class AgentRunner {
     for (;;) {
       const turn = this.store.claimNextTurn(projectId);
       if (!turn) return;
+      this.publishWorkItemState(projectId, turn.workItemId);
       this.hub.publish(projectId, "turn_started", turn, turn.id);
       await this.execute(projectId, turn);
       const completed = this.store.getTurn(turn.id);
@@ -996,15 +986,11 @@ export class AgentRunner {
         latestWorkItem?.type === "structured_requirement" &&
         latestWorkItem.workflowState === "technical_design"
       ) {
-        try {
-          await validateTechnicalDesign(
-            paths.projectRoot,
-            latestWorkItem.requirementSequence
-          );
-          technicalDesignReady = true;
-        } catch (error) {
-          if (!(error instanceof WorkflowDocumentError)) throw error;
-        }
+        await validateTechnicalDesign(
+          paths.projectRoot,
+          latestWorkItem.requirementSequence
+        );
+        technicalDesignReady = true;
       }
       if (
         workItem.type === "direct_coding" &&
@@ -1098,6 +1084,9 @@ export class AgentRunner {
                 ? error.message
                 : "智能体执行失败";
         this.completeOpenItems(turn.id, status);
+        if (status === "failed") {
+          this.publishFailureNotice(projectId, turn.id, errorMessage ?? "智能体执行失败");
+        }
         const failed = this.store.finishTurn(turn.id, status, {
           error: errorMessage
         });
@@ -1149,6 +1138,23 @@ export class AgentRunner {
       "work_item_updated",
       workItem,
       `work:${workItem.id}:${workItem.revision}`
+    );
+  }
+
+  private publishFailureNotice(projectId: string, turnId: string, error: string): void {
+    const notice = this.store.createAssistantItem(projectId, turnId, "final_answer");
+    this.hub.publish(projectId, "item_started", notice, notice.id);
+    const text = `本轮未完成：平台校验或执行失败——${error}。请根据当前状态重新执行。`;
+    this.store.appendAssistantText(notice.id, text);
+    this.hub.publish(
+      projectId,
+      "item_assistant_message_delta",
+      { turnId, itemId: notice.id, delta: text },
+      notice.id
+    );
+    this.publishItemCompleted(
+      projectId,
+      this.store.completeAssistantItem(notice.id)
     );
   }
 

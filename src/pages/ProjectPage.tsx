@@ -518,6 +518,8 @@ export function ProjectPage({
     turn: ConversationTurn;
     source: "button" | "natural_language";
   } | null>(null);
+  const [stopSubmitting, setStopSubmitting] = useState(false);
+  const [stopError, setStopError] = useState("");
   const [previewImage, setPreviewImage] = useState<string | null>(null);
   const [newConversationActivity, setNewConversationActivity] = useState(false);
   const [newTerminalOutput, setNewTerminalOutput] = useState(false);
@@ -1205,7 +1207,15 @@ export function ProjectPage({
     ) {
       return { action: "return_to_stage", targetState: "technical_design" as const };
     }
-    if (/^确认需求$/.test(normalized)) return { action: "confirm_requirements" };
+    if (/^(确认需求|进入技术设计阶段|开始技术设计)$/.test(normalized)) {
+      if (
+        activeWorkItem.workflowState === "requirements_pending_confirmation" &&
+        ["stopped", "failed"].includes(activeWorkItem.executionState)
+      ) {
+        return { action: "continue_execution" };
+      }
+      return { action: "confirm_requirements" };
+    }
     if (/^(确认技术方案|确认方案|开始开发)$/.test(normalized)) {
       return { action: "confirm_technical" };
     }
@@ -1227,6 +1237,7 @@ export function ProjectPage({
         /^(停止|停止任务|停止当前任务)[。！!]?$/u.test(draft.trim()) &&
         running
       ) {
+        setStopError("");
         setConfirmStop({ turn: running, source: "natural_language" });
         return;
       }
@@ -1623,7 +1634,10 @@ export function ProjectPage({
                 onRemoveUpload={(uploadId) => api.deleteUpload(guest.id, uploadId)}
                 running={Boolean(running)}
                 onStop={() => {
-                  if (running) setConfirmStop({ turn: running, source: "button" });
+                  if (running) {
+                    setStopError("");
+                    setConfirmStop({ turn: running, source: "button" });
+                  }
                 }}
                 queueFull={queuedCount >= 10}
                 busy={connection !== "connected"}
@@ -1964,29 +1978,40 @@ export function ProjectPage({
       {confirmStop && (
         <div className="modal-backdrop" role="presentation">
           <div className="dialog" role="dialog" aria-modal="true" aria-labelledby="stop-title">
-            <button className="dialog-close" onClick={() => setConfirmStop(null)} aria-label="关闭"><X size={17} /></button>
+            <button className="dialog-close" disabled={stopSubmitting} onClick={() => setConfirmStop(null)} aria-label="关闭"><X size={17} /></button>
             <h2 id="stop-title">停止当前任务？</h2>
             <p>已经产生的文件变化不会回滚；后续排队消息会暂停，直到你明确继续执行。</p>
+            {stopError && <p className="dialog-error" role="alert" aria-live="assertive">{stopError}</p>}
             <div>
-              <button className="button secondary" onClick={() => setConfirmStop(null)}>继续执行</button>
+              <button className="button secondary" disabled={stopSubmitting} onClick={() => setConfirmStop(null)}>继续执行</button>
               <button
                 className="button destructive"
+                disabled={stopSubmitting}
                 onClick={async () => {
-                  await api.stopTurn(
-                    guest.id,
-                    projectId,
-                    confirmStop.turn.id,
-                    {
-                      confirmed: true,
-                      revision: activeWorkItem!.revision,
-                      idempotencyKey: crypto.randomUUID(),
-                      source: confirmStop.source
-                    }
-                  );
-                  setConfirmStop(null);
+                  setStopSubmitting(true);
+                  setStopError("");
+                  try {
+                    const stopped = await api.stopTurn(
+                      guest.id,
+                      projectId,
+                      confirmStop.turn.id,
+                      {
+                        confirmed: true,
+                        revision: activeWorkItem!.revision,
+                        idempotencyKey: crypto.randomUUID(),
+                        source: confirmStop.source
+                      }
+                    );
+                    mergeTurn(stopped);
+                    setConfirmStop(null);
+                  } catch (reason) {
+                    setStopError(reason instanceof Error ? reason.message : "停止失败，请重试");
+                  } finally {
+                    setStopSubmitting(false);
+                  }
                 }}
               >
-                确认停止
+                {stopSubmitting ? "正在停止…" : "确认停止"}
               </button>
             </div>
           </div>

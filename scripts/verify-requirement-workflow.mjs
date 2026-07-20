@@ -44,6 +44,7 @@ const created = await request(`/api/guests/${guest.id}/projects`, {
   method: "POST",
   body: JSON.stringify({
     mode: "structured_requirement",
+    confirmed: true,
     text: [
       "规划一个最小化的部署验收标记功能：项目首页展示只读文本“需求工作流验收通过”。",
       "不需要权限、配置、数据存储或兼容历史数据，验收标准为页面可见该文本。",
@@ -58,7 +59,7 @@ if (initial.turn.status !== "completed") {
   throw new Error(`Requirement discussion failed: ${initial.turn.status} ${initial.turn.error ?? ""}`);
 }
 
-await request(
+const confirmed = await request(
   `${projectPath}/work-items/${created.workItem.id}/actions`,
   {
     method: "POST",
@@ -72,13 +73,22 @@ await request(
   }
 );
 
-const finalized = await waitForTurn(projectPath, 2);
-if (finalized.turn.status !== "completed") {
-  throw new Error(`Requirement document finalization failed: ${finalized.turn.status} ${finalized.turn.error ?? ""}`);
+let requirementTurnStatus = initial.turn.status;
+let snapshot = await request(projectPath);
+let technicalSequence = 2;
+if (confirmed.workItem.workflowState === "requirements_pending_confirmation") {
+  const completed = await waitForTurn(projectPath, 2);
+  if (completed.turn.status !== "completed") {
+    throw new Error(`Requirement package completion failed: ${completed.turn.status} ${completed.turn.error ?? ""}`);
+  }
+  requirementTurnStatus = completed.turn.status;
+  snapshot = await request(projectPath);
+  technicalSequence = 3;
+} else if (confirmed.workItem.workflowState !== "technical_design") {
+  throw new Error(`Confirmation did not enter a supported state: ${confirmed.workItem.workflowState}`);
 }
 
-const snapshot = await request(projectPath);
-const technicalTurn = snapshot.turns.items.find((turn) => turn.sequence === 3);
+const technicalTurn = snapshot.turns.items.find((turn) => turn.sequence === technicalSequence);
 if (!technicalTurn) throw new Error("Technical design turn was not created");
 if (!["technical_design", "technical_pending_confirmation"].includes(snapshot.activeWorkItem.workflowState)) {
   throw new Error(`Unexpected workflow state: ${snapshot.activeWorkItem.workflowState}`);
@@ -99,7 +109,7 @@ console.log(
       baseUrl,
       projectId: created.project.id,
       requirementDocument: requirementDocument.path,
-      requirementTurnStatus: finalized.turn.status,
+      requirementTurnStatus,
       workflowState: snapshot.activeWorkItem.workflowState,
       technicalTurnStatus: technicalTurn.status
     },

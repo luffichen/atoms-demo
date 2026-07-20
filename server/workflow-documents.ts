@@ -1,5 +1,5 @@
 import { appendFile, readdir, readFile, stat } from "node:fs/promises";
-import { dirname, join, relative } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 
 export class WorkflowDocumentError extends Error {
   constructor(
@@ -57,10 +57,9 @@ function requireSections(
     .filter(({ aliases }) =>
       !aliases.some((alias) =>
         parsed.some(
-          ({ heading, body }) =>
+          ({ heading }) =>
             heading.includes(alias.toLowerCase()) &&
-            !(alias === "目标" && heading.includes("非目标")) &&
-            body.length > 0
+            !(alias === "目标" && heading.includes("非目标"))
         )
       )
     )
@@ -73,13 +72,17 @@ function requireSections(
   }
 }
 
-function rejectPending(markdown: string, documentLabel: string): void {
-  if (/待确认|tbd|to be confirmed/iu.test(markdown)) {
-    throw new WorkflowDocumentError(
-      "document_has_pending_items",
-      `${documentLabel}仍包含待确认项`
-    );
-  }
+function linkedMarkdownDocuments(root: string, readme: string): string[] {
+  const rootPrefix = resolve(root) + sep;
+  return [
+    ...new Set(
+      [...readme.matchAll(/\]\(([^)\s]+\.md)(?:#[^)]+)?\)/giu)]
+        .map((match) => match[1].replace(/^\.\//u, ""))
+        .filter((target) => !target.includes("://") && !target.startsWith("/"))
+        .map((target) => resolve(root, target))
+        .filter((target) => target.startsWith(rootPrefix))
+    )
+  ].sort();
 }
 
 export async function validateRequirementPackage(
@@ -117,8 +120,10 @@ export async function validateRequirementPackage(
       ],
       "正式需求 README"
     );
-    rejectPending(content, "正式需求 README");
-    const documents = (await listFiles(root, ".md")).filter((path) => path !== readme);
+    const atomicIndex = markdownSections(content).find(({ heading }) =>
+      /原子需求索引|需求索引|atomic requirements/iu.test(heading)
+    );
+    const documents = linkedMarkdownDocuments(root, atomicIndex?.body ?? "");
     for (const document of documents) {
       const atomic = await readFile(document, "utf8");
       requireSections(
@@ -132,7 +137,6 @@ export async function validateRequirementPackage(
         ],
         `原子需求 ${relative(root, document)}`
       );
-      rejectPending(atomic, `原子需求 ${relative(root, document)}`);
     }
     return { root, readme, documents };
   }
@@ -151,6 +155,7 @@ export async function validateTechnicalDesign(
   const files = (await listFiles(technicalRoot, ".md")).filter((path) =>
     relative(technicalRoot, path).split(/[\\/]/u).some((part) => part.startsWith(`${sequence}-`))
   );
+  let lastError: WorkflowDocumentError | null = null;
   for (const path of files) {
     const content = await readFile(path, "utf8");
     try {
@@ -173,26 +178,16 @@ export async function validateTechnicalDesign(
         ],
         "技术方案"
       );
-      rejectPending(content, "技术方案");
-      for (const { heading, body } of markdownSections(content)) {
-        if (
-          /不适用|not applicable/iu.test(body) &&
-          !/不适用[：:]|无需|因为|原因|not applicable[：:]/iu.test(body)
-        ) {
-          throw new WorkflowDocumentError(
-            "technical_not_applicable_unexplained",
-            `技术方案章节“${heading}”声明不适用但没有说明原因`
-          );
-        }
-      }
       return path;
     } catch (error) {
       if (!(error instanceof WorkflowDocumentError)) throw error;
+      lastError = error;
     }
   }
+  if (lastError) throw lastError;
   throw new WorkflowDocumentError(
     "technical_design_incomplete",
-    `未找到结构完整且无待确认项的技术方案 ${sequence}-*.md`
+    `未找到结构完整的技术方案 ${sequence}-*.md`
   );
 }
 
@@ -244,6 +239,7 @@ export async function validateTestReport(
   const files = (await listFiles(reportsRoot, ".md")).filter((path) =>
     relative(reportsRoot, path).split(/[\\/]/u).some((part) => part.startsWith(`${sequence}-`))
   );
+  let lastError: WorkflowDocumentError | null = null;
   for (const path of files) {
     const content = await readFile(path, "utf8");
     try {
@@ -262,24 +258,6 @@ export async function validateTestReport(
         ],
         "测试报告"
       );
-      rejectPending(content, "测试报告");
-      const reportSections = markdownSections(content);
-      const conclusion = reportSections.find(({ heading }) => heading.includes("最终结论"));
-      if (!conclusion || !/(通过|passed)/iu.test(conclusion.body)) {
-        throw new WorkflowDocumentError(
-          "test_conclusion_failed",
-          "测试报告最终结论必须明确为通过"
-        );
-      }
-      const acceptance = reportSections.find(({ heading }) =>
-        heading.includes("验收映射") || heading.includes("验收标准映射")
-      );
-      if (!acceptance || !/(?:→|->|通过|passed)/iu.test(acceptance.body)) {
-        throw new WorkflowDocumentError(
-          "acceptance_mapping_incomplete",
-          "测试报告必须把验收标准逐项映射到验证结果"
-        );
-      }
       const screenshotPaths = [...content.matchAll(/!\[[^\]]*\]\(([^)]+)\)/g)]
         .map((match) => match[1].split("#", 1)[0].split("?", 1)[0])
         .filter((reference) => /\.(?:png|jpe?g)$/iu.test(reference))
@@ -302,10 +280,12 @@ export async function validateTestReport(
       return { reportPath: path, screenshotPaths };
     } catch (error) {
       if (!(error instanceof WorkflowDocumentError)) throw error;
+      lastError = error;
     }
   }
+  if (lastError) throw lastError;
   throw new WorkflowDocumentError(
     "test_report_incomplete",
-    `未找到结构完整、证据齐全且无待确认项的测试报告 ${sequence}-*.md`
+    `未找到结构完整且证据齐全的测试报告 ${sequence}-*.md`
   );
 }

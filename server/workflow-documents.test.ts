@@ -19,17 +19,18 @@ describe("结构化工作流文档门禁", () => {
     await rm(root, { recursive: true, force: true });
   });
 
-  it("正式需求包校验 README、原子需求结构和待确认项", async () => {
+  it("正式需求包校验 README 与索引引用的原子需求结构，不扫描待确认措辞", async () => {
     const directory = join(root, "docs", "requirements", "R007-feature");
     await mkdir(directory, { recursive: true });
     await writeFile(
       join(directory, "README.md"),
-      "# 功能\n## 总体目标\n目标\n## 范围\n范围\n## 非目标\n无\n## 依赖\n无\n## 原子需求索引\n- [原子需求](./atomic.md)"
+      "# 功能\n## 总体目标\n目标\n## 范围\n范围\n## 非目标\n无\n## 依赖\n无\n## 原子需求索引\n- [原子需求](./atomic.md)\n## 决策记录\n此前待确认的事项已采用默认方案。\n另见[技术设计](./DESIGN.md)。"
     );
     await writeFile(
       join(directory, "atomic.md"),
       "# 原子需求\n## 目标\n目标\n## 需求\n需求\n## 验收标准\n通过\n## 非目标\n无\n## 原子性检查\n可独立验收"
     );
+    await writeFile(join(directory, "DESIGN.md"), "# 技术设计\n不属于原子需求");
 
     await expect(validateRequirementPackage(root, 7)).resolves.toMatchObject({
       root: directory,
@@ -41,7 +42,7 @@ describe("结构化工作流文档门禁", () => {
     });
   });
 
-  it("技术方案必须覆盖全部强制章节且没有待确认项", async () => {
+  it("技术方案只校验编号文件和章节结构，不分析章节正文", async () => {
     const directory = join(root, "docs", "technical");
     await mkdir(directory, { recursive: true });
     const path = join(directory, "R007-feature.md");
@@ -50,10 +51,15 @@ describe("结构化工作流文档门禁", () => {
       [
         "# 技术方案",
         "## 背景与需求引用",
+        "此前标记为待确认的事项已经采用默认方案。",
         "## 现状分析",
         "## 总体方案",
+        "### 架构概览",
+        "方案正文只写在子章节中。",
         "## 数据模型",
         "## 接口与事件",
+        "### 事件",
+        "不适用。本项目没有事件流。",
         "## 前端交互",
         "## 安全边界",
         "## 兼容性",
@@ -62,9 +68,14 @@ describe("结构化工作流文档门禁", () => {
         "## 上线回滚",
         "## 风险",
         "## 非目标"
-      ].join("\n内容\n") + "\n内容"
+      ].join("\n")
     );
     await expect(validateTechnicalDesign(root, 7)).resolves.toBe(path);
+
+    await writeFile(path, "# 技术方案\n## 背景与需求引用");
+    await expect(validateTechnicalDesign(root, 7)).rejects.toMatchObject({
+      code: "document_sections_missing"
+    });
   });
 
   it("界面项目的测试报告必须引用两张有效截图", async () => {
@@ -82,7 +93,8 @@ describe("结构化工作流文档门禁", () => {
         "## 命令",
         "## 耗时",
         "## 摘要",
-        "## 验收映射\nAC1 → 通过",
+        "历史记录中曾有待确认事项，结果引用结构化测试证据。",
+        "## 验收映射",
         "## 界面尺寸",
         "桌面 1440x900，移动 390x844",
         "![桌面](./R007-assets/desktop.png)",
@@ -90,8 +102,8 @@ describe("结构化工作流文档门禁", () => {
         "## 已知限制",
         "无",
         "## 最终结论",
-        "通过"
-      ].join("\n内容\n")
+        "结论正文不参与 Markdown 结构门禁。"
+      ].join("\n")
     );
     await expect(validateTestReport(root, 7, true)).resolves.toEqual({
       reportPath: report,

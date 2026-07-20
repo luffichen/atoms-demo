@@ -32,6 +32,7 @@ import {
 } from "./release-validation.js";
 import {
   recordUiEvidence,
+  validateRequirementPackage,
   validateTechnicalDesign,
   validateTestReport,
   WorkflowDocumentError
@@ -1156,9 +1157,66 @@ export async function buildApp(options: {
       }
       const paths = await ensureProjectPaths(config, project.guestId, project.id);
       const source = request.body?.source ?? "button";
+      const finalizeRequirements = async () => {
+        const current = store.getWorkItem(item.id);
+        if (!current || current.archivedAt) {
+          throw new StoreError("work_item_not_found", "工作项不存在", 404);
+        }
+        try {
+          await validateRequirementPackage(paths.projectRoot, current.requirementSequence);
+        } catch (error) {
+          if (!(error instanceof WorkflowDocumentError)) throw error;
+          const pending = store.transitionWorkItem(
+            current.id,
+            "requirements_pending_confirmation",
+            source,
+            project.guestId
+          );
+          const completionTurn = store.enqueueTurn(
+            project.id,
+            "当前编号需求包尚未完整落盘。只补全这一套需求文档，将未单独回答的事项采用此前推荐方案或合理默认值；不要重新访谈，也不要创建重复目录。"
+          );
+          hub.publish(project.id, "work_item_updated", pending, `work:${pending.id}:${pending.revision}`);
+          hub.publish(project.id, "turn_created", completionTurn, completionTurn.id);
+          runner.kick(project.id);
+          return { workItem: pending, turn: completionTurn };
+        }
+        const requirementsCheckpoint = await versions.checkpoint(
+          paths.repositoryRoot,
+          paths.projectRoot,
+          current.branchRef,
+          "Confirm requirements"
+        );
+        store.addWorkItemEvent(
+          current.id,
+          "checkpoint",
+          "system",
+          current.workflowState,
+          current.workflowState,
+          project.guestId,
+          { name: "Confirm requirements", commitSha: requirementsCheckpoint.commitSha }
+        );
+        const updated = store.transitionWorkItem(
+          current.id,
+          "technical_design",
+          source,
+          project.guestId
+        );
+        const turn = store.enqueueTurn(
+          project.id,
+          "需求已经确认；未单独回答的事项采用需求文档中的推荐默认方案。探索当前代码并生成完整技术方案。"
+        );
+        hub.publish(project.id, "work_item_updated", updated, `work:${updated.id}:${updated.revision}`);
+        hub.publish(project.id, "turn_created", turn, turn.id);
+        runner.kick(project.id);
+        return { workItem: updated, turn };
+      };
       if (action === "continue_execution") {
         if (!["stopped", "failed"].includes(item.executionState)) {
           throw new StoreError("invalid_transition", "当前工作无需重试", 409);
+        }
+        if (item.workflowState === "requirements_pending_confirmation") {
+          return finalizeRequirements();
         }
         const updated = store.setWorkItemExecution(item.id, "idle");
         const turn = store.enqueueTurn(
@@ -1175,20 +1233,7 @@ export async function buildApp(options: {
         if (item.workflowState !== "requirements_discussion") {
           throw new StoreError("invalid_transition", "当前阶段不能确认需求", 409);
         }
-        const updated = store.transitionWorkItem(
-          item.id,
-          "requirements_pending_confirmation",
-          source,
-          project.guestId
-        );
-        const turn = store.enqueueTurn(
-          project.id,
-          "整理本工作项前面已经确认的需求结论，生成并保存对应的正式需求文档。"
-        );
-        hub.publish(project.id, "work_item_updated", updated, `work:${updated.id}:${updated.revision}`);
-        hub.publish(project.id, "turn_created", turn, turn.id);
-        runner.kick(project.id);
-        return { workItem: updated, turn };
+        return finalizeRequirements();
       }
       if (action === "confirm_technical") {
         if (item.workflowState !== "technical_pending_confirmation") {
@@ -2039,11 +2084,12 @@ export async function buildApp(options: {
           409
         );
       }
+      const stopIdempotencyKey = `stop:${turn.id}`;
       store.reserveWorkflowAction({
         workItemId: item.id,
         action: "stop",
-        revision: request.body.revision!,
-        idempotencyKey: request.body.idempotencyKey,
+        revision: item.revision,
+        idempotencyKey: stopIdempotencyKey,
         source: request.body.source ?? "button",
         actorGuestId: project.guestId
       });
@@ -2055,7 +2101,7 @@ export async function buildApp(options: {
         item.workflowState,
         project.guestId,
         { action: "stop", turnId: turn.id },
-        `audit:${request.body.idempotencyKey}`
+        `audit:${stopIdempotencyKey}`
       );
       const stopped = await runner.stop(project.id, turn.id);
       const updated = store.getWorkItem(item.id)!;

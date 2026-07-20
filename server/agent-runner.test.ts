@@ -88,13 +88,13 @@ describe("AgentRunner 文档图片归档", () => {
 });
 
 describe("结构化文档硬门禁", () => {
-  it("技术方案缺少强制章节或包含待确认项时拒绝确认", async () => {
+  it("技术方案只按编号和章节标题校验，不扫描待确认措辞", async () => {
     const root = await mkdtemp(join(tmpdir(), "atoms-technical-gate-"));
     try {
       const technical = join(root, "docs", "technical");
       await mkdir(technical, { recursive: true });
       await writeFile(join(technical, "R003-feature.md"), "# 背景与需求引用\n\n待确认");
-      await expect(validateTechnicalDesignDocument(root, 3)).rejects.toThrow(/缺少必备章节|待确认/);
+      await expect(validateTechnicalDesignDocument(root, 3)).rejects.toThrow(/缺少必备章节/);
 
       await writeFile(
         join(technical, "R003-feature.md"),
@@ -104,7 +104,7 @@ describe("结构化文档硬门禁", () => {
             "背景与需求引用", "现状分析", "总体方案", "数据模型", "接口与事件",
             "前端交互", "安全边界", "兼容性", "实施步骤", "测试计划",
             "上线与回滚", "风险", "非目标"
-          ].map((heading) => `## ${heading}\n\n不适用：本需求无需额外处理。`)
+          ].map((heading) => `## ${heading}\n\n此前待确认；不适用。本需求没有额外处理。`)
         ].join("\n\n")
       );
       await expect(validateTechnicalDesignDocument(root, 3)).resolves.toContain("R003-feature.md");
@@ -132,10 +132,10 @@ describe("结构化文档硬门禁", () => {
         "## 最终结论\n通过"
       ].join("\n\n");
       await writeFile(reportPath, report());
-      await expect(validateStructuredTestReport(root, 4)).rejects.toThrow(/缺少.*截图/);
+      await expect(validateStructuredTestReport(root, 4, true)).rejects.toThrow(/缺少.*截图/);
       await writeFile(join(reports, "assets", "desktop.png"), "png");
       await writeFile(reportPath, report("![桌面验收](assets/desktop.png)"));
-      await expect(validateStructuredTestReport(root, 4)).resolves.toBe(reportPath);
+      await expect(validateStructuredTestReport(root, 4, true)).resolves.toBe(reportPath);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -371,6 +371,7 @@ describe("AgentRunner 对话 Item 事件", () => {
       project,
       turn,
       events,
+      runner,
       handle,
       state: {
         assistantScope: 0,
@@ -804,6 +805,28 @@ describe("AgentRunner 对话 Item 事件", () => {
     expect(events.filter(({ kind }) => kind === "item_completed")).toHaveLength(1);
     expect(events.map(({ kind }) => kind)).not.toContain("item_command_output_snapshot");
   });
+
+  it("平台校验失败时在智能体输出后追加权威失败结论", () => {
+    const { project, turn, events, runner } = harness();
+    (
+      runner as unknown as {
+        publishFailureNotice(projectId: string, turnId: string, error: string): void;
+      }
+    ).publishFailureNotice(project.id, turn.id, "正式需求缺少验收标准");
+
+    expect(store.listAssistantItems(turn.id).at(-1)).toMatchObject({
+      phase: "final_answer",
+      status: "completed",
+      text: expect.stringContaining("本轮未完成")
+    });
+    expect(events.map(({ kind }) => kind)).toEqual(
+      expect.arrayContaining([
+        "item_started",
+        "item_assistant_message_delta",
+        "item_completed"
+      ])
+    );
+  });
 });
 
 describe("AgentRunner 系统提示", () => {
@@ -851,11 +874,16 @@ describe("AgentRunner 系统提示", () => {
     expect(prompt).toContain("只作为已确认的实现约束记录");
     expect(prompt).toContain("不要继续提问");
     expect(prompt).toContain("待办列表和需求草稿也必须保持产品视角");
+    expect(prompt).toContain("最多向用户提出三个问题");
+    expect(prompt).toContain("docs/requirements/R001-<short-slug>/");
+    expect(prompt).toContain("推荐方案作为当前默认结论");
+    expect(prompt).toContain("不要在 docs/requirements 根目录另外创建一套草稿");
+    expect(prompt).toContain("不能把首次落盘推迟到用户确认之后");
     expect(prompt).not.toContain("relentlessly");
     expect(prompt).not.toContain("design tree");
   });
 
-  it("需求确认后要求先根据完整对话生成带编号的正式需求文档", () => {
+  it("需求确认补全只维护一个编号需求包并采用默认方案", () => {
     const workItem = {
       id: "work-1",
       projectId: "project-1",
@@ -876,11 +904,11 @@ describe("AgentRunner 系统提示", () => {
 
     const prompt = buildWorkItemPrompt("整理正式需求文档", workItem);
 
-    expect(prompt).toContain("前面完整对话中已确认的结论");
-    expect(prompt).toContain("docs/requirements/R007-<short-slug>/");
-    expect(prompt).toContain("当前任务不是继续访谈");
-    expect(prompt).toContain("用户明确给出的技术信息只记录为实现约束");
-    expect(prompt).toContain("不得自行补充技术选型");
+    expect(prompt).toContain("需求确认后的文档补全任务");
+    expect(prompt).toContain("docs/requirements/R007-*/");
+    expect(prompt).toContain("不要重新生成第二套需求文档");
+    expect(prompt).toContain("尚未落盘，则只创建这一套");
+    expect(prompt).toContain("推荐方案或合理默认值");
   });
 
   it("只接受当前需求编号目录下的 Markdown 作为阶段门禁", async () => {

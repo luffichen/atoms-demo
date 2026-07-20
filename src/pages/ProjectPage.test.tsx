@@ -501,6 +501,65 @@ describe("ProjectPage", () => {
     expect(alert).toHaveTextContent("请先完成当前「开发」阶段");
   });
 
+  it("旧版需求待确认失败时，自然语言进入技术设计会触发快速重新执行", async () => {
+    const activeWorkItem: WorkItem = {
+      id: "work-requirements-legacy",
+      projectId: project.id,
+      type: "structured_requirement",
+      requirementSequence: 1,
+      title: "旧版需求",
+      workflowState: "requirements_pending_confirmation",
+      executionState: "failed",
+      baseCommit: "base",
+      branchRef: "refs/heads/work/work-requirements-legacy",
+      revision: 8,
+      error: "旧版需求校验失败",
+      createdAt: "2026-01-01T00:00:00Z",
+      updatedAt: "2026-01-01T00:00:01Z",
+      archivedAt: null,
+      publishedVersionId: null
+    };
+    apiMock.project.mockResolvedValue({
+      ...projectResponse(),
+      activeWorkItem
+    });
+    apiMock.workItemAction.mockResolvedValue({
+      workItem: {
+        ...activeWorkItem,
+        workflowState: "technical_design",
+        executionState: "idle",
+        revision: 9,
+        error: null
+      },
+      turn: {
+        ...turn,
+        id: "technical-turn",
+        workItemId: activeWorkItem.id,
+        sequence: 2,
+        status: "queued"
+      }
+    });
+    render(
+      <ProjectPage guest={guest} projectId={project.id} onGuestChange={() => undefined} />
+    );
+    await screen.findByRole("heading", { name: "验收项目" });
+
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "进入技术设计阶段" } });
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+
+    await waitFor(() =>
+      expect(apiMock.workItemAction).toHaveBeenCalledWith(
+        guest.id,
+        project.id,
+        activeWorkItem.id,
+        expect.objectContaining({
+          action: "continue_execution",
+          source: "natural_language"
+        })
+      )
+    );
+  });
+
   it("直接编码完成后通过实时状态解锁发布，无需刷新页面", async () => {
     const runningWorkItem = {
       id: "work-direct",
@@ -1757,11 +1816,13 @@ describe("ProjectPage", () => {
       ...projectResponse([runningTurn]),
       activeWorkItem
     });
-    apiMock.stopTurn.mockResolvedValue({
-      ...runningTurn,
-      status: "cancelled",
-      completedAt: "2026-07-20T00:01:00Z"
-    });
+    apiMock.stopTurn
+      .mockRejectedValueOnce(new Error("工作项已更新，请重试"))
+      .mockResolvedValue({
+        ...runningTurn,
+        status: "cancelled",
+        completedAt: "2026-07-20T00:01:00Z"
+      });
     render(
       <ProjectPage guest={guest} projectId={project.id} onGuestChange={() => undefined} />
     );
@@ -1773,6 +1834,10 @@ describe("ProjectPage", () => {
       await screen.findByRole("dialog", { name: "停止当前任务？" })
     ).toBeInTheDocument();
     expect(apiMock.sendMessage).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "确认停止" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("工作项已更新，请重试");
+    expect(screen.getByRole("dialog", { name: "停止当前任务？" })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "确认停止" }));
     await waitFor(() =>
@@ -1787,6 +1852,9 @@ describe("ProjectPage", () => {
           source: "natural_language"
         })
       )
+    );
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "停止当前任务？" })).not.toBeInTheDocument()
     );
   });
 

@@ -29,6 +29,51 @@ const config: AppConfig = {
   isProduction: false
 };
 
+async function writeRequirementPackage(
+  guestId: string,
+  projectId: string,
+  requirementSequence = 1
+): Promise<void> {
+  const paths = await ensureProjectPaths(config, guestId, projectId);
+  const sequence = `R${String(requirementSequence).padStart(3, "0")}`;
+  const root = `${paths.projectRoot}/docs/requirements/${sequence}-feature`;
+  await mkdir(root, { recursive: true });
+  await writeFile(
+    `${root}/README.md`,
+    [
+      "# 功能需求",
+      "## 总体目标",
+      "交付可验收功能。",
+      "## 范围",
+      "使用推荐默认方案。",
+      "## 非目标",
+      "无。",
+      "## 依赖",
+      "无。",
+      "## 原子需求索引",
+      "- [核心功能](./REQ-01.md)",
+      "## 决策记录",
+      "此前待确认的事项已采用默认方案。"
+    ].join("\n")
+  );
+  await writeFile(
+    `${root}/REQ-01.md`,
+    [
+      "# 核心功能",
+      "## 目标",
+      "提供核心能力。",
+      "## 需求",
+      "按默认方案实现。",
+      "## 验收标准",
+      "用户可见功能结果。",
+      "## 非目标",
+      "无。",
+      "## 原子性检查",
+      "可独立验收。"
+    ].join("\n")
+  );
+}
+
 describe("动态预览代理", () => {
   it("把框架返回的本地运行端口重定向改写为公开预览域名", () => {
     const target = { hostname: "127.0.0.1", port: 36787 };
@@ -267,13 +312,13 @@ describe("HTTP API", () => {
       url: `/api/guests/${guest.id}/projects/${payload.project.id}/turns/${running.id}/stop`,
       payload: {
         confirmed: true,
-        revision,
+        revision: revision - 1,
         idempotencyKey: "natural-stop-1",
         source: "natural_language"
       }
     });
 
-    expect(confirmed.statusCode).toBe(200);
+    expect(confirmed.statusCode, JSON.stringify(confirmed.json())).toBe(200);
     expect(confirmed.json()).toMatchObject({ status: "cancelled" });
     expect(store.getWorkItem(payload.workItem.id)).toMatchObject({
       workflowState: "direct_coding",
@@ -968,7 +1013,7 @@ describe("HTTP API", () => {
     expect(older.json().turns.hasMore).toBe(false);
   });
 
-  it("确认需求后先自动创建需求文档落盘轮次", async () => {
+  it("确认需求后直接固定当前需求包并进入技术设计", async () => {
     const guest = store.listGuests()[0];
     const created = await app.inject({
       method: "POST",
@@ -977,6 +1022,7 @@ describe("HTTP API", () => {
     });
     const payload = created.json();
     store.cancelQueuedTurn(payload.turn.id);
+    await writeRequirementPackage(guest.id, payload.project.id);
     const revision = store.getWorkItem(payload.workItem.id)!.revision;
     const idempotencyKey = "confirm-requirements-1";
 
@@ -1008,28 +1054,60 @@ describe("HTTP API", () => {
     });
     expect(confirmed.statusCode).toBe(200);
     expect(confirmed.json()).toMatchObject({
-      workItem: { workflowState: "requirements_pending_confirmation" },
+      workItem: { workflowState: "technical_design" },
       turn: {
         status: "queued",
         sequence: 2,
         items: [
           expect.objectContaining({
             type: "user_message",
-            text: "整理本工作项前面已经确认的需求结论，生成并保存对应的正式需求文档。"
+            text: expect.stringContaining("采用需求文档中的推荐默认方案")
           })
         ]
       }
     });
     expect(runner.kick).toHaveBeenCalledTimes(2);
-    expect(store.listNotifications(guest.id)).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          message: "需求文档等待确认",
-          workItemId: payload.workItem.id,
-          targetUrl: expect.stringContaining("section=current")
-        })
-      ])
-    );
+    expect(
+      store.listTurns(payload.project.id, undefined, 50, payload.workItem.id).items
+    ).toHaveLength(2);
+  });
+
+  it("确认时需求包尚未落盘只创建一次补全文档轮次", async () => {
+    const guest = store.listGuests()[0];
+    const created = await app.inject({
+      method: "POST",
+      url: `/api/guests/${guest.id}/projects`,
+      payload: { text: "尚未落盘的需求", mode: "structured_requirement", confirmed: true }
+    });
+    const payload = created.json();
+    store.cancelQueuedTurn(payload.turn.id);
+    const revision = store.getWorkItem(payload.workItem.id)!.revision;
+
+    const confirmed = await app.inject({
+      method: "POST",
+      url: `/api/guests/${guest.id}/projects/${payload.project.id}/work-items/${payload.workItem.id}/actions`,
+      payload: {
+        action: "confirm_requirements",
+        source: "button",
+        confirmed: true,
+        revision,
+        idempotencyKey: "confirm-missing-package"
+      }
+    });
+
+    expect(confirmed.statusCode, JSON.stringify(confirmed.json())).toBe(200);
+    expect(confirmed.json()).toMatchObject({
+      workItem: { workflowState: "requirements_pending_confirmation" },
+      turn: {
+        status: "queued",
+        sequence: 2,
+        items: [
+          expect.objectContaining({
+            text: expect.stringContaining("不要创建重复目录")
+          })
+        ]
+      }
+    });
   });
 
   it("同一阶段确认幂等键只成功一次，过期 revision 被拒绝", async () => {
@@ -1041,6 +1119,7 @@ describe("HTTP API", () => {
     });
     const payload = created.json();
     store.cancelQueuedTurn(payload.turn.id);
+    await writeRequirementPackage(guest.id, payload.project.id);
     const revision = store.getWorkItem(payload.workItem.id)!.revision;
     const actionPayload = {
       action: "confirm_requirements",
@@ -1069,7 +1148,7 @@ describe("HTTP API", () => {
       }
     });
 
-    expect(first.statusCode).toBe(200);
+    expect(first.statusCode, JSON.stringify(first.json())).toBe(200);
     expect(duplicate.statusCode).toBe(409);
     expect(duplicate.json().error.code).toBe("action_already_processed");
     expect(stale.statusCode).toBe(409);
@@ -1078,6 +1157,54 @@ describe("HTTP API", () => {
       store.listTurns(payload.project.id, undefined, 50, payload.workItem.id).items
         .filter(({ status }) => status === "queued")
     ).toHaveLength(1);
+  });
+
+  it("旧版需求待确认失败工作项重新执行时直接进入技术设计", async () => {
+    const guest = store.listGuests()[0];
+    const created = await app.inject({
+      method: "POST",
+      url: `/api/guests/${guest.id}/projects`,
+      payload: { text: "恢复旧版需求", mode: "structured_requirement", confirmed: true }
+    });
+    const payload = created.json();
+    store.cancelQueuedTurn(payload.turn.id);
+    await writeRequirementPackage(guest.id, payload.project.id);
+    store.transitionWorkItem(
+      payload.workItem.id,
+      "requirements_pending_confirmation",
+      "system",
+      guest.id
+    );
+    store.setWorkItemExecution(payload.workItem.id, "failed", "旧版全文关键词校验失败");
+    const revision = store.getWorkItem(payload.workItem.id)!.revision;
+
+    const resumed = await app.inject({
+      method: "POST",
+      url: `/api/guests/${guest.id}/projects/${payload.project.id}/work-items/${payload.workItem.id}/actions`,
+      payload: {
+        action: "continue_execution",
+        source: "button",
+        revision,
+        idempotencyKey: "resume-legacy-requirements"
+      }
+    });
+
+    expect(resumed.statusCode, JSON.stringify(resumed.json())).toBe(200);
+    expect(resumed.json()).toMatchObject({
+      workItem: {
+        workflowState: "technical_design",
+        executionState: "idle",
+        error: null
+      },
+      turn: {
+        status: "queued",
+        items: [
+          expect.objectContaining({
+            text: expect.stringContaining("推荐默认方案")
+          })
+        ]
+      }
+    });
   });
 
   it("无法流转时返回动作、当前阶段、允许阶段和下一步建议", async () => {
