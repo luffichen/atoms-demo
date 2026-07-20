@@ -1,0 +1,4 @@
+interface:
+  display_name: "Atoms 项目设计风格"
+  short_description: "以 Atoms 工作台风格统一项目界面、组件与交互体验"
+  default_prompt: "使用 $atoms-design-style 设计并实现这个页面，确保视觉、组件和交互与项目现有风格一致。"

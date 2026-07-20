@@ -1,0 +1,50 @@
+[Unit]
+Description=Atoms Demo
+After=network-online.target workspace.mount
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=atoms
+Group=atoms
+WorkingDirectory=/opt/atoms-demo/current
+Environment=NODE_ENV=production
+Environment=HOST=127.0.0.1
+Environment=PORT=8080
+Environment=ATOMS_WORKSPACE_ROOT=/workspace
+Environment=ATOMS_DATABASE_PATH=/workspace/atoms-demo.sqlite
+Environment=DEEPSEEK_KEY_FILE=/etc/atoms-demo/deepseek.key
+Environment=DEEPSEEK_MODEL=deepseek-v4-pro
+Environment=RELEASE_METADATA_MODEL=deepseek-v4-flash
+Environment=ATOMS_PUBLIC_DOMAIN=__DOMAIN__
+Environment=PI_SKIP_VERSION_CHECK=1
+Environment=PI_TELEMETRY=0
+ExecStart=/usr/bin/node dist/server/index.js
+Restart=always
+RestartSec=3
+TimeoutStopSec=35
+
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateTmp=true
+ProtectClock=true
+ProtectControlGroups=true
+ProtectHome=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectSystem=strict
+ReadWritePaths=/workspace
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+IPAddressDeny=10.0.0.0/8
+IPAddressDeny=172.16.0.0/12
+IPAddressDeny=192.168.0.0/16
+IPAddressDeny=169.254.0.0/16
+IPAddressDeny=fc00::/7
+IPAddressDeny=fe80::/10
+LockPersonality=true
+MemoryDenyWriteExecute=false
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

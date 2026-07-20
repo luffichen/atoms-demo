@@ -1,0 +1,84 @@
+:root {
+  color-scheme: light;
+
+  --atoms-blue: #4267ff;
+  --atoms-blue-hover: #425ce1;
+  --atoms-canvas: #e5e7eb;
+  --atoms-background: #f6f6f6;
+  --atoms-surface: #ffffff;
+  --atoms-surface-recessed: #f6f6f6;
+  --atoms-ink: #0d0d0d;
+  --atoms-text-secondary: #3c3c3c;
+  --atoms-text-muted: #767676;
+  --atoms-disabled: #b0b0b0;
+  --atoms-border: #d1d1d1;
+  --atoms-hairline: #e5e7eb;
+
+  --background: var(--atoms-background);
+  --foreground: var(--atoms-ink);
+  --card: var(--atoms-surface);
+  --card-foreground: var(--atoms-ink);
+  --popover: var(--atoms-surface);
+  --popover-foreground: var(--atoms-ink);
+  --primary: var(--atoms-blue);
+  --primary-foreground: #ffffff;
+  --secondary: var(--atoms-surface-recessed);
+  --secondary-foreground: var(--atoms-ink);
+  --muted: var(--atoms-surface-recessed);
+  --muted-foreground: var(--atoms-text-muted);
+  --accent: var(--atoms-surface-recessed);
+  --accent-foreground: var(--atoms-ink);
+  --border: var(--atoms-hairline);
+  --input: var(--atoms-border);
+  --ring: var(--atoms-blue);
+
+  --font-sans: "IBM Plex Sans", Inter, "PingFang SC", "Microsoft YaHei",
+    system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-serif: "IBM Plex Serif", "Source Serif Pro", Georgia, serif;
+
+  --radius-control: 8px;
+  --radius-menu: 12px;
+  --radius-panel: 16px;
+  --radius-card: 24px;
+  --radius-pill: 9999px;
+
+  --shadow-sm: 0 1px 4px rgba(13, 13, 13, 0.04);
+  --shadow-card: 0 8px 24px -4px rgba(13, 13, 13, 0.08),
+    0 4px 4px rgba(13, 13, 13, 0.04);
+
+  --motion-fast: 140ms;
+  --motion-panel: 200ms;
+  --ease-atoms: cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+html {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  min-height: 100vh;
+  margin: 0;
+  background: var(--background);
+  color: var(--foreground);
+  font-size: 14px;
+  line-height: 1.57;
+}
+
+:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}

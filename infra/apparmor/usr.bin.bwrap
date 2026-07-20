@@ -1,0 +1,14 @@
+# Bubblewrap needs a user namespace to construct its project-only filesystem.
+# Ubuntu 24.04 denies unprofiled user namespaces by default, so give only the
+# sandbox launcher that permission. Bubblewrap still applies the mount, PID,
+# IPC, UTS, process-session, and systemd network restrictions configured by
+# Atoms Demo.
+
+abi <abi/4.0>,
+include <tunables/global>
+
+profile atoms-demo-bwrap /usr/bin/bwrap flags=(unconfined) {
+  userns,
+
+  include if exists <local/usr.bin.bwrap>
+}

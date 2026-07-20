@@ -1,0 +1,39 @@
+{
+	on_demand_tls {
+		ask http://127.0.0.1:8080/api/preview-domain-check
+	}
+}
+
+__DOMAIN__ {
+	encode zstd gzip
+	reverse_proxy 127.0.0.1:8080
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+	}
+}
+
+https:// {
+	tls {
+		on_demand
+	}
+	encode zstd gzip
+	reverse_proxy 127.0.0.1:8080
+
+	header {
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "camera=(), microphone=(), geolocation=()"
+	}
+}
+
+http://__DOMAIN__ {
+	redir https://__DOMAIN__{uri} permanent
+}
+
+http:// {
+	redir https://{host}{uri} permanent
+}
